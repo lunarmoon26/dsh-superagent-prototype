@@ -1,0 +1,39 @@
+/* A test-only host theme supplies the tokens normally owned by the DSH shell. Panel CSS stays production code. */
+:root {
+  font: 14px/1.5 system-ui, sans-serif;
+  --dsw-alias-bg-base: #fff;
+  --dsw-alias-bg-layer-1: #fff;
+  --dsw-alias-bg-layer-2: #fff;
+  --dsw-alias-bg-layer-3: #f4f5f7;
+  --dsw-alias-bg-module-platform: #f7f8fa;
+  --dsw-alias-bg-mask-1: #0005;
+  --dsw-alias-label-primary: #17202c;
+  --dsw-alias-label-secondary: #364152;
+  --dsw-alias-label-tertiary: #637085;
+  --dsw-alias-label-caption: #637085;
+  --dsw-alias-label-dimmed: #94a0b2;
+  --dsw-alias-label-primary-foreground: #fff;
+  --dsw-alias-border-l2: #d2d9e2;
+  --dsw-alias-border-l3: #e2e6ed;
+  --dsw-alias-border-l4: #edf0f4;
+  --dsw-alias-brand-primary: #345ff4;
+  --dsw-alias-link: #345ff4;
+  --dsw-alias-button-primary-fill: #345ff4;
+  --dsw-alias-button-primary-hover: #264edb;
+  --dsw-alias-button-ghost-active-border: #d0d9f4;
+  --dsw-alias-button-ghost-active-fill: #eef2ff;
+  --dsw-alias-interactive-bg-hover: #f1f4f9;
+  --dsw-alias-interactive-bg-active: #e8edf8;
+  --dsw-alias-state-warn-primary: #a7660a;
+  --dsw-alias-state-error-primary: #c23e45;
+  --dsw-alias-state-success-primary: #158060;
+  --dsw-alias-state-business-primary: #345ff4;
+  --dsw-alias-state-idle-primary: #7c8ba0;
+  --dsw-alias-toast-bg: #17202c;
+  --dsw-alias-tooltip-bg: #17202c;
+  --dsw-static-neutral-bluish-00: #fff;
+  --dsw-elevation-prominent: 0 8px 32px #17202c20;
+  --dsw-elevation-soft: 0 2px 10px #17202c12;
+}
+body { margin: 0; }
+button, input, textarea, select { font: inherit; }

@@ -27,6 +27,8 @@ import { settingsView } from './views/settings.ts'
 import { sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
+import { dalObservation } from './dal.ts'
+import { ArtifactChecks, MAX_ARTIFACT_BYTES, WorkerEvidenceError, workerEvidenceView } from './worker-evidence.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -85,6 +87,7 @@ function failure(error: unknown): [number, Record<string, unknown>] {
   }
   if (error instanceof SetupError) return [400, { error: error.message, setup: error.problem }]
   if (error instanceof RouteError) return [error.status, { error: error.message }]
+  if (error instanceof WorkerEvidenceError) return [error.status, { error: error.message }]
   if (error instanceof UserError) return [error.missing ? 404 : 400, { error: error.message, code: error.code, values: error.values }]
   if (error instanceof SettingsConflict || error instanceof PromptConflict) return [409, { error: error.message }]
   return [500, { error: error instanceof Error ? error.message : String(error) }]
@@ -150,6 +153,7 @@ const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().no
 
 function routes(runtime: HttpHost): Routes {
   const { store } = runtime
+  const checks = new ArtifactChecks(store)
   const ticket = (id: string) => { if (!store.tickets.get(id)) throw new RouteError(404, 'Ticket not found'); return id }
   const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
   return {
@@ -190,6 +194,16 @@ function routes(runtime: HttpHost): Routes {
       return ticketList(views(runtime), state, offset, limit)
     },
     'GET tickets/:id': ({ params }) => ticketPage(runtime, params.id),
+    'GET tickets/:id/dal-observation': ({ params }) => dalObservation(store.tickets.get(ticket(params.id))!, runtime.masterId),
+    'GET tickets/:id/worker-evidence': ({ params }) => workerEvidenceView(store, store.tickets.get(ticket(params.id))!),
+    'PUT tickets/:id/artifact-contract': async ({ params, body }) => {
+      const value = await body(256 * 1024)
+      return checks.contract(store.tickets.get(ticket(params.id))!, value)
+    },
+    'POST tickets/:id/artifact-check': async ({ params, body }) => {
+      const value = await body(4 * Math.ceil(MAX_ARTIFACT_BYTES / 3) + 4096)
+      return checks.verify(store.tickets.get(ticket(params.id))!, value)
+    },
     'POST tickets/:id/retry': ({ params }) => { const id = ticket(params.id); runtime.engine.retryTicket(id); return { retried: true } },
     'POST tickets/:id/stop': ({ params }) => { const id = ticket(params.id); runtime.engine.stopTicket(id); return { stopped: true } },
     'POST executor/pause': async ({ body }) => runtime.settings.pause(z.object({ paused: z.boolean() }).parse(await body()).paused, 'panel'),
@@ -234,7 +248,8 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
     ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (!url.pathname.startsWith('/orchestrator/api/')) { res.writeHead(404); res.end(); return }
-      if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+      const port = ctx.webServer.port
+      if (port === undefined || !sameOrigin(req, port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
       try {
         await runtime.ready
         const route = match(table, req.method ?? 'GET', url.pathname.slice('/orchestrator/api/'.length).split('/'))

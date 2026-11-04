@@ -37,7 +37,7 @@ Editing a part changes the instructions the model receives. It does not change t
 
 On an explicit human request, the main Session can also save overrides with `orchestrator_prompts_save`. If a save omits an override's `base`, it keeps the saved base. A removed part already present in the saved configuration is dropped on save; any other unknown part is refused.
 
-An override records which built-in text it was based on. Upgrades preserve the team's text. If the default changes, the panel marks the part **Default updated** and shows the difference beside the team's text. The team can keep its text, use the new default or edit it. Parts without overrides automatically follow new defaults.
+An override records which built-in text it was based on. Upgrades preserve the team's text. If the default changes, the panel marks the part **Default updated** and shows the difference beside the team's text. The team can keep its text, use the new default or edit it. Parts without overrides follow new defaults; an already pinned worker Assignment refuses changed rendered text rather than silently switching its strategy.
 
 The main Session can read affected part names in `orchestrator_read prompts`, under `default_changed`.
 
@@ -92,5 +92,6 @@ These apply [000 Philosophy](000-philosophy.md) to the agents:
 
 - Each save creates an immutable version containing the full configuration, revision number, predecessor, timestamp and origin (panel or tool). Restoring a version or defaults creates another version.
 - Saves name their base revision. A conflicting save is refused without discarding the draft.
-- Sessions read the latest version on every model request, including later steps in the same turn. Saving does not restart, cancel or wake a Session. The host records the revisions each Session used; an Executor can read any revision it worked under.
+- The router reads the latest version on every model request. A worker's first actual request assembly pins its Assignment to the then-current revision and prompt/skill text digests; later requests retain that revision. Previews do not create pins. New Assignments can select a successor revision, including recovery Assignments after an interrupted busy worker. Settled Assignments keep their pin across restart. Saving does not restart, cancel or wake a Session. The host records revisions each Session used; an Executor can read its bound revision and ones it worked under before.
+- The partial strategy pin and separate execution-context digest use the strict schemas in `src/app/worker-evidence.ts`. Changed built-in text, skills or context fail request assembly rather than overwrite the binding. This pins neither inherited DSH/repository instructions nor models, tools or runtime resources. Historical unpinned Assignments remain unknown.
 - The deployment sets a total size limit, including overrides. Validation refuses unknown keys, reserved built-in skill names, unknown override parts and missing template placeholders. It never silently truncates text. An override identical to the default is removed so the part follows future defaults.

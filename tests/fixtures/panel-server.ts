@@ -22,6 +22,10 @@ import { githubKind } from '../../src/sources/github.ts'
 import type { Health } from '../../src/sources/host.ts'
 import type { SourceKind } from '../../src/sources/kind.ts'
 import { testDeployment } from './deployment.ts'
+import { dalObservation } from '../../src/app/dal.ts'
+import { ArtifactChecks, WorkerEvidenceError, workerEvidenceView } from '../../src/app/worker-evidence.ts'
+import type { Store } from '../../src/app/store.ts'
+import type { Ticket } from '../../src/core/index.ts'
 
 export const MEMBER = 'ou_alice'
 const ALLOWED: Record<string, { id: string; name?: string }[]> = { feishu: [{ id: MEMBER, name: 'Alice' }], github: [{ id: 'alice' }] }
@@ -89,6 +93,7 @@ export interface PanelServer {
   joinError?: string
   settings: Settings; revisions: Record<string, number>
   prompts: PromptsView
+  evidence: Map<string, unknown>
   tickets: { open: TicketRow[]; ended: TicketRow[] }; ticketDetails: Record<string, TicketPageView>
   threads: ThreadRow[]
   threadPages: (key: string, query: { before?: string; around?: string }) => ThreadPageView | undefined
@@ -247,7 +252,7 @@ function initial(): PanelServer {
     en: 'Feishu message' } }
   const defaults = { revision: 0, previousRevision: null, savedAt: '', source: 'defaults' }
   return {
-    health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [],
+    health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [], evidence: new Map(),
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
         name: 'Widgets Bot' } } },
@@ -289,6 +294,22 @@ const page = <T>(items: T[]) => ({ items, total: items.length, next_offset: null
 const ticketOf = (id: string) =>
   [...server.tickets.open, ...server.person, ...server.tickets.ended].find(ticket => ticket.id === id) ?? server.ticketDetails[id]
 const SourceSave = z.object({ enabled: z.boolean(), config: z.unknown() })
+export const evidenceStore = {
+  get: (key: string) => server.evidence.get(key),
+  set: (key: string, value: unknown) => { server.evidence.set(key, value) },
+  atomic: <T,>(run: () => T) => run(),
+} as Pick<Store, 'get' | 'set' | 'atomic'>
+function evidenceTicket(id: string): Ticket {
+  const detail = server.ticketDetails[id]
+  if (!detail) return refuse(404, 'Ticket not found') as never
+  return detail as unknown as Ticket
+}
+function evidenceAnswer<T>(run: () => T): T {
+  try { return run() } catch (error) {
+    if (error instanceof WorkerEvidenceError) return refuse(error.status, error.message) as never
+    throw error
+  }
+}
 
 const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET state': { answer: stateView },
@@ -327,6 +348,15 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET tickets': { query: ['state', 'offset', 'limit'], answer: ({ query }) => page(server.tickets[query.state === 'ended' ? 'ended'
     : 'open']) },
   'GET tickets/:id': { answer: ({ params }) => server.ticketDetails[params.id] ?? refuse(404, 'Ticket not found') },
+  'GET tickets/:id/worker-evidence': { answer: ({ params }) => evidenceAnswer(() => workerEvidenceView(evidenceStore, evidenceTicket(params.id))) },
+  'PUT tickets/:id/artifact-contract': { body: true, answer: ({ params, body }) => evidenceAnswer(() =>
+    new ArtifactChecks(evidenceStore).contract(evidenceTicket(params.id), body)) },
+  'POST tickets/:id/artifact-check': { body: true, answer: ({ params, body }) => evidenceAnswer(() =>
+    new ArtifactChecks(evidenceStore).verify(evidenceTicket(params.id), body)) },
+  'GET tickets/:id/dal-observation': { answer: ({ params }) => {
+    const detail = server.ticketDetails[params.id]
+    return detail ? dalObservation(detail, 'fixture-workspace') : refuse(404, 'Ticket not found')
+  } },
   'POST tickets/:id/retry': { answer: ({ params }) => {
     const ticket = ticketOf(params.id)
     if (!ticket) return refuse(404, 'Ticket not found')
@@ -386,7 +416,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     }
     server.prompts.revision++
     server.prompts.current = promptVersion(server.prompts.revision, Object.keys(overrides).length ? { ...config, overrides } : config)
-    return { revision: server.prompts.revision, context_delivery: 'injected' }
+    return { revision: server.prompts.revision, effect: 'router-next-request-worker-next-assignment', context_delivery: 'injected' }
   } },
   'POST prompts/preview': { body: true, answer: ({ body }) => {
     const skills = [...server.setup.accounts?.feishu ? ['feishu'] : [], 'github', ...Object.keys(body.skills)].map(name => [name,
@@ -457,8 +487,7 @@ type Ops = Parameters<ConfigForm<Record<string, unknown>>['mutate']>[0]
 export function fakeForm(writable = true, accept = true) {
   const listeners = new Set<() => void>()
   let snapshot: ConfigFormSnapshot<Record<string, unknown>> = { status: 'ready', value: { ...MACHINE }, base: undefined, user: undefined,
-    revision: 1, writable,
-    mode: 'host' }
+    revision: 1, writable }
   const notify = () => { for (const listener of listeners) listener() }
   const mutations: { ops: Ops; revision: number | undefined }[] = []
   const form: ConfigForm<Record<string, unknown>> = {

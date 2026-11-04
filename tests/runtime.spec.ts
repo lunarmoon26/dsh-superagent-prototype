@@ -17,6 +17,7 @@ import type { Machine } from '../src/deployment.ts'
 import { SCHEMA_VERSION, Store } from '../src/app/store.ts'
 import { TextCache } from '../src/app/cache.ts'
 import { KV } from '../src/kv.ts'
+import { strategyPin, evidenceSha256 } from '../src/app/worker-evidence.ts'
 import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/policy.ts'
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
@@ -102,6 +103,7 @@ function seed(store: Store, accounts: Accounts = {}): void {
   store.saveSettings(SettingsSchema.parse({ ...settings, sources: { ...others, github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT(), ...accounts.github } }, ...feishu ? { feishu: { enabled: true, config: feishu } } : {} } }))
 }
 let restarts: ReturnType<typeof vi.fn<() => void>>
+let registeredSkills: Map<string, Map<string, { name: string; content: string; description: string }>>
 async function restart(machine: Partial<Machine> = {}, accounts: Accounts = {}): Promise<Runtime> {
   await runtime.stop()
   const store = new Store(join(directory, 'orchestrator.sqlite')); seed(store, accounts); store.close()
@@ -180,7 +182,11 @@ beforeEach(async () => {
           restricts.set(sessionId, [...restricts.get(sessionId) ?? [], rule]); return () => {}
         }),
         guard: vi.fn((check: Guard) => { guards.set(sessionId, check); return () => {} }) })
-      agentCtx.reflect.provide('skills', { register: () => () => {} })
+      const skills = new Map<string, { name: string; content: string; description: string }>()
+      registeredSkills.set(sessionId, skills)
+      agentCtx.reflect.provide('skills', { register: (spec: { name: string; content: string; description: string }) => {
+        skills.set(spec.name, spec); return () => { skills.delete(spec.name) }
+      } })
       agentCtx.reflect.provide('systemPrompt', { section: (spec: Section) => { sections.set(sessionId, spec); return () => {} } })
       const inbox = { nextTurn: [] as UserMessage[], nextStep: [] as UserMessage[],
         // A pending message taken out, as DSH's inbox does by its id.
@@ -207,6 +213,7 @@ beforeEach(async () => {
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT(), OTHER(), BOT()]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const store = new Store(join(directory, 'orchestrator.sqlite')); seed(store); store.close()
+  registeredSkills = new Map()
   runtime = new Runtime(ctx, testMachine({ stateDir: directory }), restarts)
   await runtime.ready
   // Source kinds are normally registered by plugins that are not loaded in unit tests.
@@ -1031,7 +1038,7 @@ it('tells both roles the execution environment through a generated prompt sectio
 })
 
 it('lets a worker read the prompt version it works under and the ones it worked under before, also after a restart, and no other', async () => {
-  const { sessionId } = await acceptedTicket()
+  const { sessionId, ticket } = await acceptedTicket()
   const save = () => { const { config, revision } = runtime.prompts.current(); return runtime.prompts.save({ ...config, delivery: `${config.delivery}.` }, revision, 'panel').revision }
   // A model request reads the system prompt, which binds the Session to the version current then.
   const request = () => sections.get(sessionId)!.text({ signal: new AbortController().signal })
@@ -1040,16 +1047,68 @@ it('lets a worker read the prompt version it works under and the ones it worked 
   request()
   await expect(read(`prompts/${first}`)).rejects.toThrow('inaccessible prompt version')
   const third = save()
-  // Until its next request it works under the version it read; after it, it may still read that one.
+  // Further requests keep the Assignment's revision, even when a newer version is saved.
   expect(await read('prompts/current')).toMatchObject({ resource: `prompts/${second}` })
   request()
-  expect(await read('prompts/current')).toMatchObject({ resource: `prompts/${third}` })
+  expect(await read('prompts/current')).toMatchObject({ resource: `prompts/${second}` })
+  await expect(read(`prompts/${third}`)).rejects.toThrow('inaccessible prompt version')
   expect(await read(`prompts/${second}`)).toMatchObject({ resource: `prompts/${second}` })
-  expect(runtime.sessions.status().sessions).toContainEqual({ sessionId, revision: third })
+  expect(runtime.sessions.status().sessions).toContainEqual({ sessionId, revision: second })
+  // A settled Assignment is retained by restart recovery. An interrupted busy one would get a successor.
+  runtime.engine.report(ticket.id, { state: 'blocked', summary: 'Waiting for operator' })
+  const pin = strategyPin(runtime.store, ticket.id, ticket.assignments.at(-1)!.id)
   const next = await restart()
   await next.ready
   expect([next.sessions.promptVersion(sessionId).revision, next.sessions.mayRead(sessionId, second), next.sessions.mayRead(sessionId, first)])
-    .toEqual([third, true, false])
+    .toEqual([second, true, false])
+  expect(strategyPin(next.store, ticket.id, ticket.assignments.at(-1)!.id)).toEqual(pin)
+  next.sources.register(feishuKind); next.sources.register(githubKind)
+  await next.sessions.ensure(sessionId, ticket.execution!.directory, ticket.title, 'worker')
+  expect(request()).toContain(`prompt revision ${second}`)
+  next.engine.retryTicket(ticket.id)
+  await next.effects.idle('launch')
+  expect(request()).toContain(`prompt revision ${third}`)
+  expect(next.sessions.mayRead(sessionId, second)).toBe(true)
+  const successor = next.store.tickets.get(ticket.id)!.assignments.at(-1)!
+  expect(strategyPin(next.store, ticket.id, successor.id)?.manifest.prompt_revision).toBe(third)
+})
+
+it('does not pin previews, hashes registered skill text and refuses same-revision built-in or environment drift', async () => {
+  const { ticket, sessionId } = await acceptedTicket(), assignment = ticket.assignments.at(-1)!
+  const section = () => sections.get(sessionId)!
+  section().text({})
+  expect(strategyPin(runtime.store, ticket.id, assignment.id)).toBeUndefined()
+  const original = section().text({ signal: new AbortController().signal })
+  const pin = strategyPin(runtime.store, ticket.id, assignment.id)!
+  expect(pin.context_sha256).toBe(evidenceSha256(original))
+  const github = pin.manifest.skills.find(skill => skill.name === 'dsh-superagent-github')!
+  expect(github.content_sha256).toBe(evidenceSha256(runtime.prompts.skills(runtime.prompts.current().config).find(([name]) => name === 'github')![1]))
+  expect(github.description_sha256).toBe(evidenceSha256(registeredSkills.get(sessionId)!.get(github.name)!.description))
+  expect(github.content_sha256).toBe(evidenceSha256(registeredSkills.get(sessionId)!.get(github.name)!.content))
+  const compose = runtime.prompts.compose.bind(runtime.prompts)
+  vi.spyOn(runtime.prompts, 'compose').mockImplementation((...args) => `${compose(...args)}\nchanged environment`)
+  expect(() => section().text({ signal: new AbortController().signal })).toThrow('drifted')
+  vi.mocked(runtime.prompts.compose).mockRestore()
+  vi.spyOn(runtime.prompts, 'skills').mockReturnValue([['github', 'changed built-in skill']])
+  expect(() => section().text({ signal: new AbortController().signal })).toThrow('drifted')
+  expect(strategyPin(runtime.store, ticket.id, assignment.id)).toEqual(pin)
+})
+
+it('updates router requests while keeping workers and their registered custom skills on the Assignment revision', async () => {
+  const current = runtime.prompts.current()
+  const first = runtime.prompts.save({ ...current.config, skills: { example: 'first skill' } }, current.revision, 'panel')
+  const { ticket, sessionId } = await acceptedTicket()
+  const request = (id: string) => sections.get(id)!.text({ signal: new AbortController().signal })
+  request(sessionId); request(runtime.masterId)
+  const second = runtime.prompts.save({ ...first.config, delivery: 'second delivery', skills: { example: 'second skill' } }, first.revision, 'panel')
+  expect(request(runtime.masterId)).toContain(`prompt revision ${second.revision}`)
+  expect(request(sessionId)).toContain(`prompt revision ${first.revision}`)
+  expect(registeredSkills.get(sessionId)!.get('dsh-superagent-example')!.content).toBe('first skill')
+  runtime.engine.report(ticket.id, { state: 'blocked', summary: 'Await retry' })
+  runtime.engine.retryTicket(ticket.id)
+  await runtime.effects.idle('launch')
+  expect(request(sessionId)).toContain(`prompt revision ${second.revision}`)
+  expect(registeredSkills.get(sessionId)!.get('dsh-superagent-example')!.content).toBe('second skill')
 })
 
 it('passes team text with template braces to every Session literally, without reading them as prompt variables', async () => {

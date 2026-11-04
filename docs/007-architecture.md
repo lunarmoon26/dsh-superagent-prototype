@@ -236,7 +236,7 @@ Validation inherits an omitted base from the saved override, drops removed parts
 
 `prompt` delivers once per request id. `relay` and `notify` enqueue main-Session messages handled by the `relay` and `notice` effects. `src/app/notices.ts` defines their content; `delivery` checks whether a message arrived.
 
-Each model request binds the Session to the current prompt revision. The revisions it used are stored durably: `promptVersion` identifies the active one and `mayRead` restricts which versions a worker can inspect. Registrations are tracked in one map per agent.
+Each router request selects the current prompt revision. A worker's first request assembly binds its Assignment's prompt/skill manifest and context digest; later requests use its pinned revision and reject text/context drift. Previews do not write pins. The revisions used are stored durably: `promptVersion` selects the current Assignment's revision and `mayRead` restricts which versions a worker can inspect. Skill registration and manifest hashing share the same text/description builder. Registrations are tracked in one map per agent.
 
 `status` and `promptVersion` serve prompt pages. Saves go through `Prompts.save` and notify the main Session. `modelRetry` exposes model-budget retry state.
 
@@ -343,6 +343,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/tools/main.ts` | The main Session's tools |
 | `src/app/tools/executor.ts` | An Executor Session's tools |
 | `src/app/http.ts` | The `/orchestrator/api` routes: the same-origin check, request limits and one status per kind of failure |
+| `src/app/dal.ts` | Pure metadata-only Ticket/Assignment projection for DAL; hashed identities, content addressing, no verification or activation authority |
+| `src/app/worker-evidence.ts` | Strict persisted Assignment strategy pins, immutable check contracts and bounded content-addressed supplied-artifact receipts; no execution or promotion authority |
+| `src/client/worker-evidence.tsx` | Native Assignment pin/receipt views, historical evidence, immutable contract editor and bounded operator file upload |
 | `src/app/api.ts` | `Api`, every route with its parameters, query, body and response, and the filters of the lists; it imports only types, so the panel bundles it |
 | `src/app/views/text.ts` | The two forms of a view's text: `preview`, plain text on one line, and `markdown` without HTML; `plain` and `readable` |
 | `src/app/views/records.ts` | The rows the views share: Triggers, Tickets, Threads, Decisions and Channel links, and `ownersOf`, the owners of follow-ups as one request reads them |
@@ -369,7 +372,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
 | `src/sources/feishu-trigger.ts` | Feishu messages as Triggers, by one rule for live events, history pages and topic pages |
-| `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics |
+| `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics; a late stderr readiness line cannot erase an error already observed in the same consumer |
 | `src/sources/feishu-channel.ts` | The Feishu Channel: topic replies, `sent` or `gone` |
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
@@ -427,6 +430,13 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
 | `tests/runtime-concurrency.spec.ts` | Work that overlaps: Triggers during a pass, Tickets that change during deliveries and launches |
 | `tests/http.spec.ts` | The same-origin and loopback checks, the status of each kind of failure, the body limit, path parameters and queries |
+| `tests/dal.spec.ts` | Metadata-only projection, golden DAL interoperability, distinct retries, privacy omission and explicit unknown assurance |
+| `tests/worker-evidence.spec.ts` | Strategy drift, persistence, frozen contracts, artifact digest/results, strict bounds, stale bindings and corrupt evidence |
+| `tests/e2e.spec.ts` | Opt-in real HTTP/Chromium/Runtime/SQLite workflow, scripted DSH/Source boundaries, restart, artifact failures and built DAL CLI ingestion |
+| `tests/fixtures/e2e/native-flow.ts` | Bounded live router/worker Agent loops through production orchestration, with explicit native-service bridges and fixed-output tools |
+| `tests/fixtures/e2e/profile.py` | Installed DSH Web-profile and built-bundle startup, real-shell browser panel checks, isolated account-free setup and clean restart |
+| `tests/panel-worker-evidence.spec.tsx` | Native bilingual pin/check views, contract confirmation, file upload, historical isolation, rejected uploads and unchanged Ticket actions |
+| `tests/panel-dal.spec.tsx` | Bilingual report/verification distinction, on-demand download, failure recovery and unchanged ticket actions |
 | `tests/settings.spec.ts` | Settings saves that race a model or account check, a Policy sync that a save outran, and the refusals of the pause, a sync and a block |
 | `tests/views.spec.ts` | What the management views derive from the Store, such as the Thread a dropped message belongs to |
 | `tests/timeline.spec.ts` | A Thread's pages and a Trigger's neighbours by time and then id, with every received Trigger's time in one form |
