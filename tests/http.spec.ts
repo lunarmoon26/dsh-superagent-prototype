@@ -6,13 +6,67 @@ import { SettingsConflict } from '../src/app/settings.ts'
 import type { HttpHost } from '../src/app/http.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { SetupError } from '../src/setup.ts'
+import { dalTicket } from './fixtures/dal.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Store } from '../src/app/store.ts'
+import { bindStrategy } from '../src/app/worker-evidence.ts'
 
 type Handler = (req: unknown, res: unknown) => Promise<void>
 type Headers = Record<string, string | undefined>
+
+it('exports DAL observations only through the read-only same-origin management route', async () => {
+  const ticket = dalTicket(), before = structuredClone(ticket)
+  const call = serve({ masterId: 'fixture-workspace', store: { tickets: { get: (id: string) => id === ticket.id ? ticket : undefined } } })
+  const path = `tickets/${ticket.id}/dal-observation`
+  expect(await call('GET', path)).toMatchObject({ status: 200, body: { producer: 'dsh-superagent', verification: 'unverified' } })
+  expect(await call('GET', path, undefined, { origin: 'http://evil.example' })).toMatchObject({ status: 403 })
+  expect(await call('GET', path, undefined, { 'x-orchestrator-request': undefined })).toMatchObject({ status: 403 })
+  expect(await call('POST', path)).toMatchObject({ status: 404 })
+  expect(await call('GET', 'tickets/missing/dal-observation')).toMatchObject({ status: 404 })
+  expect(ticket).toEqual(before)
+})
+
+it('protects frozen artifact checks, bounds bodies and refuses stale bindings without changing ticket acceptance', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'evidence-http-')), store = new Store(join(directory, 'db.sqlite'))
+  try {
+    const ticket = dalTicket(), original = structuredClone(ticket), assignment = ticket.assignments.at(-1)!
+    store.tickets.save(ticket)
+    const pin = bindStrategy(store, ticket.id, assignment.id, 0, 'prompt', 'context', [], true)
+    const call = serve({ store }), base = `tickets/${ticket.id}`
+    const request = { assignment_id: assignment.id, generation_id: pin.generation_id,
+      checks: [{ id: 'required', kind: 'contains', value: 'expected' }] }
+    for (const [method, path, value] of [['GET', 'worker-evidence', undefined], ['PUT', 'artifact-contract', request],
+      ['POST', 'artifact-check', {}]] as const) {
+      expect(await call(method, `${base}/${path}`, value, { origin: 'http://evil.example' })).toMatchObject({ status: 403 })
+    }
+    expect(await call('GET', `${base}/worker-evidence`)).toMatchObject({ status: 200, body: { current: { pin, contract: null } } })
+    expect(await call('PUT', `${base}/artifact-contract`, { ...request, checks: [] })).toMatchObject({ status: 400 })
+    const frozen = await call('PUT', `${base}/artifact-contract`, request)
+    expect(frozen.status).toBe(200)
+    expect(await call('PUT', `${base}/artifact-contract`, request)).toEqual(frozen)
+    expect(await call('PUT', `${base}/artifact-contract`, { ...request, checks: [{ ...request.checks[0], value: 'changed' }] }))
+      .toMatchObject({ status: 409 })
+    const upload = { assignment_id: assignment.id, generation_id: pin.generation_id, contract_id: frozen.body.id,
+      artifact_base64: Buffer.from('expected file').toString('base64') }
+    const checked = await call('POST', `${base}/artifact-check`, upload)
+    expect(checked).toMatchObject({ status: 200, body: { status: 'passed', scope: 'supplied-artifact-only' } })
+    expect(await call('POST', `${base}/artifact-check`, upload)).toEqual(checked)
+    expect(await call('POST', `${base}/artifact-check`, { ...upload, artifact_base64: '!invalid' })).toMatchObject({ status: 400 })
+    expect(await call('POST', `${base}/artifact-check`, { ...upload, artifact_base64: 'A'.repeat(1403000) })).toMatchObject({ status: 400 })
+    expect(await call('PUT', `${base}/artifact-contract`, ' '.repeat(256 * 1024 + 1))).toMatchObject({ status: 400 })
+    expect(store.tickets.get(ticket.id)).toEqual(original)
+    ticket.assignments.push({ ...assignment, id: 'successor' }); store.tickets.save(ticket)
+    expect(await call('POST', `${base}/artifact-check`, upload)).toMatchObject({ status: 409 })
+    expect(await call('PUT', `${base}/artifact-contract`, request)).toMatchObject({ status: 409 })
+    expect(await call('GET', 'tickets/missing/worker-evidence')).toMatchObject({ status: 404 })
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
+})
 /** Mount management HTTP routes on a fake web server and return a request helper that includes default panel headers. */
-function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.0.1') {
+function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.0.1', port: number | null = 3082) {
   let handler: Handler = async () => {}
-  const ctx = { webServer: { host, port: 3082, register: (route: { handler: Handler }) => { handler = route.handler; return () => {} } } }
+  const ctx = { webServer: { host, port: port ?? undefined, register: (route: { handler: Handler }) => { handler = route.handler; return () => {} } } }
   registerHttp(ctx as never, { ready: Promise.resolve(), ...runtime } as unknown as HttpHost)
   return async (method: string, path: string, body?: unknown, headers: Headers = {}) => {
     let status = 0, text = ''
@@ -78,6 +132,8 @@ it('answers only a same-origin request from the panel on the loopback address', 
   expect(await post({ host: 'localhost:3082', origin: 'http://localhost:3082' })).toMatchObject({ status: 200 })
   // Management routes require a loopback Web server.
   expect(() => serve({}, '0.0.0.0')).toThrow('Orchestrator management requires a loopback Web server')
+  // rc.5 can expose the server before it has bound a TCP port; do not guess one from request headers.
+  expect(await serve({}, '127.0.0.1', null)('GET', 'state')).toMatchObject({ status: 403 })
 })
 
 it('answers a prompt save that lost a race with 409, and a settings body over 128 KiB with 400', async () => {

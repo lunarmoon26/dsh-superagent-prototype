@@ -29,6 +29,9 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
+- [009 DAL evidence](docs/009-dal-evidence.md): metadata-only observations and independent-verification boundaries
+- [010 Worker evidence](docs/010-worker-evidence.md): Assignment prompt/skill pins and bounded supplied-artifact checks
+- [011 End-to-end verification](docs/011-end-to-end.md): real-browser workflow, native-smoke scope and evidence limits
 
 ## Development
 

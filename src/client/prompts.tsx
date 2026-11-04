@@ -55,6 +55,7 @@ function PromptsEditor({ view, reload }: { view: PromptsView; reload: () => Prom
     { value: 'history' as const, label: t('promptViewHistory') }]
   const removed = view.defaultChanged.filter(item => item.removed).map(item => item.part)
   return <div className="dt-form">
+    <Hint>{t('promptApplyScope')}</Hint>
     <div className="dt-subtabs" role="tablist" aria-label={t('promptViews')}>{tabs.map(item => <button key={item.value} type="button"
       role="tab" className="dt-subtab" aria-selected={tab === item.value} onClick={() => setTab(item.value)}>{item.label}</button>)}</div>
     {removed.length > 0 && <Hint>{t('promptRemovedParts', { parts: removed.join(t('listSeparator')) })}</Hint>}

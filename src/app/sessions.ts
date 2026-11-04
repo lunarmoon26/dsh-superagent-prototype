@@ -15,7 +15,8 @@ import type { Variable } from './execution-environment.ts'
 import { RetryHealth } from './retry-health.ts'
 import { initializeRoleModel } from './role-models.ts'
 import { bundledSkills } from './skill-files.ts'
-import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
+import { SKILL_PREFIX, composePrompt, type PromptVersion, type Prompts } from './prompts.ts'
+import { bindStrategy, evidenceSha256, strategyPin, WorkerEvidenceError } from './worker-evidence.ts'
 import type { Store } from './store.ts'
 import { KV } from '../kv.ts'
 import type { RegisterTool, Tool } from './tools/tool.ts'
@@ -42,7 +43,7 @@ export interface SessionsHost {
  * What Sessions registered for an agent it decorated: the releases of its prompt section, tools and skill scope, the scope
  * its skills are registered in, and the skills of one prompt revision; for a worker's subagent, only its tool limits.
  */
-interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: { revision: number; dispose: () => void }; subagent?: true }
+interface SessionBinding { disposers: (() => void)[]; scope?: Context; skills?: { digest: string; dispose: () => void }; subagent?: true }
 
 /** The agent presets Executor Sessions and the main Session are created with, which the bundle's patch defines. */
 export const WORKER_PRESET = 'dsh-superagent-worker', ROUTER_PRESET = 'dsh-superagent-router'
@@ -195,6 +196,12 @@ export class Sessions {
   }
   /** Returns the prompt version a Session runs under (the one bound on its latest model request, or the current version). */
   promptVersion(sessionId: string): PromptVersion {
+    const ticketId = ticketOfSession(sessionId), ticket = ticketId && this.host.store.tickets.get(ticketId)
+    if (ticket) {
+      const assignment = ticket.assignments.at(-1)
+      const pin = assignment && strategyPin(this.host.store, ticket.id, assignment.id)
+      return pin ? this.host.prompts.version(pin.manifest.prompt_revision) : this.host.prompts.current()
+    }
     const revision = this.host.store.get(KV.sessions.prompts(sessionId))?.at(-1)
     return revision === undefined ? this.host.prompts.current() : this.host.prompts.version(revision)
   }
@@ -242,16 +249,25 @@ export class Sessions {
     this.updateModelHealth()
     // Disable variable interpolation so literal ${{ ... }} expressions in team prompts are preserved.
     binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-superagent-policy', order: 9999, interpolate: false, text: context => {
-      const version = this.promptFor(agent, context.signal !== undefined)
+      const bind = context.signal !== undefined
+      const version = master ? host.prompts.current() : this.promptVersion(agent.id)
       const current = ticket && host.store.tickets.get(ticket.id)
       const composed = host.prompts.compose(version.config, master ? 'orchestrator' : 'worker', current ? host.environment(current) : undefined)
-      return `[dsh-superagent prompt revision ${version.revision}]\n${composed}\n${current ? mandateInstructions(current.mandate) : ''}`
+      const section = `[dsh-superagent prompt revision ${version.revision}]\n${composed}\n${current ? mandateInstructions(current.mandate) : ''}`
+      if (current) {
+        const assignment = current.assignments.at(-1)
+        if (!assignment) throw new WorkerEvidenceError('Worker request has no Assignment')
+        bindStrategy(host.store, current.id, assignment.id, version.revision, composePrompt(version.config, 'worker'),
+          section, this.skillSpecs(version), bind)
+      }
+      if (bind) this.bindRequest(agent, version)
+      return section
     }, ...(master ? { complete: true } : {}) }))
     // A recreated skill scope (e.g. after the skills service restarts) starts empty, so reset `binding.skills` before rebinding.
     const skillScope = agent.ctx.inject(['skills'], scope => {
       binding.scope = scope
       binding.skills = undefined
-      this.bindSkills(binding, host.prompts.current())
+      this.bindSkills(binding, this.promptVersion(agent.id))
     })
     binding.disposers.push(() => { skillScope.dispose().catch((error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release a skill scope: %s', String(error)) }) })
     await skillScope
@@ -313,29 +329,33 @@ export class Sessions {
   /** Register the skills of a prompt version in the agent's skill scope, in place of an earlier version's. */
   private bindSkills(binding: SessionBinding, version: PromptVersion): void {
     const { scope, skills: previous } = binding
-    if (!scope || previous?.revision === version.revision) return
+    const specs = this.skillSpecs(version), digest = evidenceSha256(JSON.stringify(specs))
+    if (!scope || previous?.digest === digest) return
     previous?.dispose()
     const disposers: (() => void)[] = []
-    for (const [name, content] of this.host.prompts.skills(version.config)) {
+    for (const spec of specs) {
+      disposers.push(scope.skills.register({ ...spec, source: 'runtime' }))
+    }
+    binding.skills = { digest, dispose: () => { disposers.forEach(dispose => dispose()) } }
+  }
+  /** The same text/description feeds hashing and actual registration; resource files are outside the text pin. */
+  private skillSpecs(version: PromptVersion) {
+    return this.host.prompts.skills(version.config).map(([name, content]) => {
       const bundled = name === 'feishu' || name === 'github' ? bundledSkills[name] : undefined
       const body = version.config.skills[name] ?? ''
-      const description = bundled?.description ?? (body.replace(/\s+/g, ' ').slice(0, 120) || 'Custom dsh-superagent operational skill.')
-      disposers.push(scope.skills.register({ name: `${SKILL_PREFIX}${name}`, description, content, source: 'runtime',
-        ...(bundled ? { resourceBase: { kind: 'directory' as const, path: dirname(bundled.path) } } : {}) }))
-    }
-    binding.skills = { revision: version.revision, dispose: () => { disposers.forEach(dispose => dispose()) } }
+      return { name: `${SKILL_PREFIX}${name}`, content,
+        description: bundled?.description ?? (body.replace(/\s+/g, ' ').slice(0, 120) || 'Custom dsh-superagent operational skill.'),
+        ...(bundled ? { resourceBase: { kind: 'directory' as const, path: dirname(bundled.path) } } : {}) }
+    })
   }
-  /** Return the current prompt version, updating the agent's skills and recording the revision in Store when bound to a model request. */
-  private promptFor(agent: Agent, bind: boolean): PromptVersion {
-    const version = this.host.prompts.current()
-    if (!bind) return version
+  /** Update skills and revision-read permissions only after successful request assembly and drift validation. */
+  private bindRequest(agent: Agent, version: PromptVersion): void {
     const binding = this.bindings.get(agent)
     if (binding) this.bindSkills(binding, version)
     const { store } = this.host
     const revisions = store.get(KV.sessions.prompts(agent.id)) ?? []
     const bound = [...revisions.filter(revision => revision !== version.revision), version.revision]
     if (revisions.at(-1) !== version.revision) store.set(KV.sessions.prompts(agent.id), bound)
-    return version
   }
   /** Releases registrations for `agent` in reverse order (LIFO); disposing its skill scope releases its skills as well. */
   private release(agent: Agent): void {

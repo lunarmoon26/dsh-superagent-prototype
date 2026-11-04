@@ -8,6 +8,8 @@ import type { SettingsView } from './views/settings.ts'
 import type { SourceStatusView } from './views/sources.ts'
 import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } from './views/threads.ts'
 import type { TicketListView } from './views/tickets.ts'
+import type { DalObservation } from './dal.ts'
+import type { ArtifactContract, ArtifactReceipt, WorkerEvidenceView } from './worker-evidence.ts'
 
 export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
@@ -32,6 +34,12 @@ export interface Api {
   'POST decisions/:id/dismiss': { response: { dismissed: true } }
   'GET tickets': { query?: Paged & { state?: TicketFilter }; response: TicketListView }
   'GET tickets/:id': { response: TicketPageView }
+  'GET tickets/:id/dal-observation': { response: DalObservation }
+  'GET tickets/:id/worker-evidence': { response: WorkerEvidenceView }
+  'PUT tickets/:id/artifact-contract': { body: { assignment_id: string; generation_id: string;
+    checks: ArtifactContract['checks'] }; response: ArtifactContract }
+  'POST tickets/:id/artifact-check': { body: { assignment_id: string; generation_id: string; contract_id: string;
+    artifact_base64: string }; response: ArtifactReceipt }
   'POST tickets/:id/retry': { response: { retried: true } }
   'POST tickets/:id/stop': { response: { stopped: true } }
   'POST executor/pause': { body: { paused: boolean }; response: { paused: boolean } }
@@ -41,7 +49,8 @@ export interface Api {
   'POST setup/check': { response: { restarting: true } }
   'GET models': { response: ModelCatalog }
   'GET prompts': { query?: { revision?: number; offset?: number }; response: PromptsView }
-  'PUT prompts': { body: { config: PromptConfig; baseRevision: number }; response: { revision: number; context_delivery: Delivery } }
+  'PUT prompts': { body: { config: PromptConfig; baseRevision: number }; response: { revision: number;
+    effect: 'router-next-request-worker-next-assignment'; context_delivery: Delivery } }
   'POST prompts/preview': { body: PromptConfig; response: ReturnType<Prompts['preview']> }
 }
 type Path<K> = K extends `${string} ${infer P}` ? P : never

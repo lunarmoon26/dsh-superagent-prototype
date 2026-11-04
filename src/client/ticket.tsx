@@ -1,9 +1,10 @@
 /** Ticket detail page: stage and actions, Mandate details, undelivered/delivered Inputs, subscribed Threads, and Assignments. */
 import { useState, type ReactNode } from 'react'
 import { ApiError, usePoll, type TicketPageView } from './api.ts'
-import { DisclosureRow, Dot, Icon, Tag, type IconName } from './controls.tsx'
+import { Button, DisclosureRow, Dot, Icon, Tag, type IconName } from './controls.tsx'
 import { decisionMark, reportDot, ticketMark } from './marks.ts'
-import { usePanel } from './provider.tsx'
+import { useAction, usePanel } from './provider.tsx'
+import { WorkerEvidence } from './worker-evidence.tsx'
 import { settingsRoute } from './route.ts'
 import { Earlier, ThreadLine, automatedRuns } from './rows.tsx'
 import { actorName, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
@@ -108,6 +109,14 @@ function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: stri
 export function TicketPage({ id }: { id: string }) {
   const { t, call } = usePanel()
   const { data, error, reload } = usePoll(() => call('GET tickets/:id', { id }), [id])
+  const download = useAction(async () => {
+    const observation = await call('GET tickets/:id/dal-observation', { id })
+    const url = URL.createObjectURL(new Blob([`${JSON.stringify(observation, null, 2)}\n`], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url; link.download = `${observation.observation_id}.json`
+    document.body.append(link)
+    try { link.click() } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 0) }
+  })
   const after = async (request: Promise<unknown>) => { await request; await reload() }
   if (!data) return <><PageHead
     title={t('term.ticket')} />{error instanceof ApiError && error.missing ? <Hint>{t('ticketNotFound')}</Hint> : <LoadState
@@ -154,6 +163,16 @@ export function TicketPage({ id }: { id: string }) {
       <span className="dt-banner-label">{t('deliveryFailedPrefix')}</span>{data.deliveryError}
     </p>}
     <MandateDetails ticket={data} actor={actor} />
+    <Section title={t('dalEvidence')} icon="shield" action={<Button variant="outline" size="sm" disabled={download.busy}
+      onClick={() => { void download.run() }}>{t('dalDownload')}</Button>}>
+      <KeyValues rows={[
+        [t('dalWorkerReport'), data.assignments.at(-1)?.report ? valueLabel(t, 'report', data.assignments.at(-1)!.report!.state) : t('empty')],
+        [t('dalVerification'), t('dalUnverified')],
+        [t('dalRuntime'), t('dalUnattested')],
+      ]} />
+      <Hint>{t('dalBoundary')}</Hint>
+      <WorkerEvidence key={id} id={id} />
+    </Section>
     {undelivered.length > 0 && <Section title={t('undeliveredInputs')} count={undelivered.length}>
       <Hint>{data.deliveryError ? t('inputRetryHint') : data.paused ? t('inputPausedHint') : t('inputWaitingHint')}</Hint>
       <InputList inputs={undelivered} />

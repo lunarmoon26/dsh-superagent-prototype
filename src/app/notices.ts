@@ -14,7 +14,7 @@ import { ticketCard } from './cards.ts'
 export type Notice = readonly [name: string, value: Record<string, unknown>, summary: string]
 /** Builds a notice for a saved prompt configuration revision, coalescing under `'prompts'`. */
 export const promptsNotice = (revision: number): Notice =>
-  ['prompts', { prompt_config_saved: revision, effect: 'next-request', read: `prompts/${revision}` }, `Prompt configuration saved (revision ${revision})`]
+  ['prompts', { prompt_config_saved: revision, effect: 'router-next-request-worker-next-assignment', read: `prompts/${revision}` }, `Prompt configuration saved (revision ${revision})`]
 /**
  * Builds a notice for a saved settings block with the changed dot-separated paths (coalescing per block under
  * `settings:<block>`), or for the whole settings on legacy saves that recorded no block.

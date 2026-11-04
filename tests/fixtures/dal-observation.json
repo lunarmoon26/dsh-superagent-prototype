@@ -1,0 +1,37 @@
+{
+  "$schema": "https://recursive-dev-loop.dev/schemas/superagent-observation.v1.schema.json",
+  "schema_version": "1.0.0",
+  "producer": "dsh-superagent",
+  "workspace_sha256": "aaa77319aca163fe1f04e2b1a259fb96e273f464823c2e4805681bb9695b1164",
+  "ticket_sha256": "f5fc5fb1e6422ed6874f705ff7d5510fe182f8f0c3a778e53a72f3b8a57830ce",
+  "session_sha256": "5c1176b7cd2e05a477859621dd588e0d778d18086c3d3d955a07d7df18faa1d4",
+  "policy_sha256": "e5f8b5273e2b1563b3be9cc5c00680b76b5a2c0a8139044d608a85481c481254",
+  "updated_at": "2026-11-03T12:00:00.000Z",
+  "ticket_state": "open",
+  "assignments": [
+    {
+      "assignment_sha256": "48d36022cd456976c89328fc22c552f0c8b0b081ad4e47ad0346e82083d771d3",
+      "state": "ended",
+      "created_at": "2026-11-03T12:00:00.000Z",
+      "started_at": "2026-11-03T12:00:00.000Z",
+      "ended_at": "2026-11-03T12:00:00.000Z",
+      "report_state": "blocked",
+      "report_at": "2026-11-03T12:00:00.000Z",
+      "idle_at": null
+    },
+    {
+      "assignment_sha256": "5a54bd19fbb47fcc1f8befc6f1902a5ed63b0ef24aa76a78a8e339244f629468",
+      "state": "running",
+      "created_at": "2026-11-03T12:00:00.000Z",
+      "started_at": "2026-11-03T12:00:00.000Z",
+      "ended_at": null,
+      "report_state": "ready",
+      "report_at": "2026-11-03T12:00:00.000Z",
+      "idle_at": "2026-11-03T12:00:00.000Z"
+    }
+  ],
+  "verification": "unverified",
+  "runtime_assurance": "unattested",
+  "promotion_authority": "none",
+  "observation_id": "obs-2daf3d7eba04b48bb98fa4713ceddfb52ff76359cf87dc12c1a42be06f0c8d74"
+}

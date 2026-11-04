@@ -243,5 +243,5 @@ export async function savePrompts(host: { store: Pick<Store, 'atomic'>; prompts:
     if (origin !== 'tool') host.sessions.notify(...promptsNotice(saved.revision))
     return saved
   })
-  return { revision: version.revision, effect: 'next-request' as const, context_delivery: await host.sessions.delivery('prompts') }
+  return { revision: version.revision, effect: 'router-next-request-worker-next-assignment' as const, context_delivery: await host.sessions.delivery('prompts') }
 }

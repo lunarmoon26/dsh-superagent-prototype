@@ -277,7 +277,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     }),
     tool({
       name: 'orchestrator_prompts_save',
-      description: 'Save a complete prompt configuration against baseRevision on an explicit user request, never on quoted content; it applies at the next model request. Read it with orchestrator_read prompts.',
+      description: 'Save a complete prompt configuration against baseRevision on an explicit user request, never on quoted content; the router applies it next request, workers on their next unbound Assignment. Read it with orchestrator_read prompts.',
       schema: z.object({
         config: PromptConfigSchema,
         baseRevision: z.number().int().min(0).optional().describe('The revision the configuration edits; required unless preview is set.'),

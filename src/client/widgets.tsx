@@ -72,14 +72,14 @@ export function ClampText({ text }: { text: string }) {
   </>
 }
 
-export function ConfirmButton({ label, title, message, onConfirm, variant = 'ghost', icon }: {
-  label: string; title: string; message: string; onConfirm: () => Promise<unknown>; variant?: 'ghost' | 'outline'; icon?: IconName
+export function ConfirmButton({ label, title, message, onConfirm, variant = 'ghost', icon, disabled }: {
+  label: string; title: string; message: string; onConfirm: () => Promise<unknown>; variant?: 'ghost' | 'outline'; icon?: IconName; disabled?: boolean
 }) {
   const { t } = usePanel()
   const [open, setOpen] = useState(false)
   const confirm = useAction(onConfirm)
   return <>
-    <Button variant={variant} size="sm" icon={icon && <Icon name={icon} size={14} />} onClick={() => setOpen(true)}>{label}</Button>
+    <Button variant={variant} size="sm" disabled={disabled} icon={icon && <Icon name={icon} size={14} />} onClick={() => setOpen(true)}>{label}</Button>
     <Modal open={open} onClose={() => setOpen(false)} title={title} closeLabel={t('close')} description={message}
       footer={<>
         <Button variant="ghost" onClick={() => setOpen(false)}>{t('cancel')}</Button>
